@@ -5,7 +5,21 @@ from urllib.parse import urljoin
 
 app = Flask(__name__)
 
-# --- ADVANCED SCANNER LOGIC ---
+# ==========================================
+# 🛡️ SECURITY HEADERS (Protect Your Scanner)
+# ==========================================
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Server'] = 'SecureScanner/1.0'
+    return response
+
+# ==========================================
+# 🔍 ADVANCED SCANNER ENGINE
+# ==========================================
 def run_advanced_scan(target):
     results = []
     if not target.startswith('http'):
@@ -13,29 +27,33 @@ def run_advanced_scan(target):
         
     results.append(f"[*] Starting Advanced Audit on: {target}")
     
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) SecureScanner/1.0"}
     
     try:
-        # 1. Basic Connection Test
-        response = requests.get(target, headers=headers, timeout=10)
+        # 1. Basic Connection & Server Info
+        response = requests.get(target, headers=headers, timeout=10, verify=True)
         results.append(f"[+] Target is online. Status: {response.status_code}")
         
-        # 2. Advanced Server Info Leak
-        server_header = response.headers.get('Server', 'Unknown')
+        server_header = response.headers.get('Server', 'Hidden')
         results.append(f"[*] Server Signature: {server_header}")
-        if "Apache" in server_header or "nginx" in server_header or "IIS" in server_header:
+        if server_header in ['Apache', 'nginx', 'IIS', 'Unknown']:
             results.append(f"[!] INFO LEAK: Server is broadcasting its software version ({server_header})")
         
-        # 3. Security Headers Check
+        # 2. Security Headers Check
         results.append("--- Security Headers ---")
-        sec_headers = ['Strict-Transport-Security', 'X-Frame-Options', 'Content-Security-Policy']
-        for h in sec_headers:
+        sec_headers = {
+            'Strict-Transport-Security': 'Prevents SSL Stripping',
+            'X-Frame-Options': 'Prevents Clickjacking',
+            'Content-Security-Policy': 'Prevents XSS',
+            'X-Content-Type-Options': 'Prevents MIME Sniffing'
+        }
+        for h, desc in sec_headers.items():
             if h not in response.headers:
-                results.append(f"[-] MISSING: {h}")
+                results.append(f"[-] MISSING: {h} ({desc})")
             else:
                 results.append(f"[+] SECURE: {h} is present.")
                 
-        # 4. Advanced Exposed Files & Directories Check
+        # 3. Advanced Exposed Files (Content-Based Validation)
         results.append("--- Exposed Files & Open Directories ---")
         files_to_check = {
             '.env': 'Environment variables (Passwords)',
@@ -50,29 +68,50 @@ def run_advanced_scan(target):
         for f, description in files_to_check.items():
             f_url = urljoin(target, f)
             try:
-                res = requests.get(f_url, headers=headers, timeout=5)
+                res = requests.get(f_url, headers=headers, timeout=5, verify=True)
+                is_vulnerable = False
                 
-                # If it's a directory, it usually ends with a slash and returns 200
+                # Professional Check: Verify the actual content
                 if res.status_code == 200:
-                    # Check if it's an open directory (contains "Index of /")
-                    if "Index of /" in res.text:
-                        results.append(f"[!!!] CRITICAL: OPEN DIRECTORY found at {f_url}")
-                    # Check if it's a real file (not a custom 404 page)
-                    elif "404" not in res.text and "Not Found" not in res.text and len(res.text) > 0:
-                        results.append(f"[!!!] CRITICAL: Exposed {description} at {f_url}")
-                    else:
-                        results.append(f"[+] Safe: {f}")
+                    content = res.text.lower()
+                    
+                    # 1. .env files must contain environment variables
+                    if f == '.env' and ('app_key=' in content or 'db_password=' in content or 'db_host=' in content):
+                        is_vulnerable = True
+                    
+                    # 2. SQL files must contain SQL syntax
+                    elif f == 'database.sql' and ('insert into' in content or 'create table' in content):
+                        is_vulnerable = True
+                    
+                    # 3. Open directories must show an "Index of /" page
+                    elif f.endswith('/') and ('index of /' in content):
+                        is_vulnerable = True
+                        
+                    # 4. Real files (zip, php, config) should NOT be standard HTML pages
+                    elif f in ['config.php', 'backup.zip', '.git/config']:
+                        if '<html' not in content and '<!doctype html' not in content and len(content) > 10:
+                            is_vulnerable = True
+
+                if is_vulnerable:
+                    results.append(f"[!!!] CRITICAL: Exposed {description} at {f_url}")
                 else:
-                    results.append(f"[+] Safe: {f} (Status: {res.status_code})")
-            except:
+                    results.append(f"[+] Safe: {f} (Custom 404 or Protected)")
+                    
+            except requests.exceptions.Timeout:
                 results.append(f"[!] Timeout checking: {f}")
+            except Exception:
+                results.append(f"[!] Error checking: {f}")
                 
+    except requests.exceptions.SSLError:
+        results.append("[-] SSL Error: The target has an invalid or expired SSL certificate.")
     except Exception as e:
         results.append(f"[-] Error scanning target: {e}")
 
     return results
 
-# --- WEB INTERFACE ---
+# ==========================================
+# 🌐 WEB INTERFACE
+# ==========================================
 @app.route('/', methods=['GET', 'POST'])
 def index():
     results = []
@@ -80,30 +119,63 @@ def index():
     
     if request.method == 'POST':
         target = request.form.get('url')
-        results = run_advanced_scan(target)
+        if target:
+            results = run_advanced_scan(target)
 
-    # The HTML UI
+    # The HTML UI with inline CSS for a professional look
     html = """
-    <html><body style="font-family: Arial; padding: 20px; background: #f4f7f6;">
-    <h2>☁️ Advanced Cloud Vulnerability Scanner</h2>
-    <form method="POST">
-        <input type="text" name="url" placeholder="Enter target URL" style="width: 300px; padding: 10px;" value="{{ target }}" required>
-        <button type="submit" style="padding: 10px 20px; background: #004085; color: white; border: none; border-radius: 4px;">Scan Now</button>
-    </form>
-    <br>
-    <div style="background: white; padding: 20px; border-radius: 5px; border: 1px solid #ccc;">
-    """
-    
-    if results:
-        html += "<h3>Scan Results:</h3><ul>"
-        for res in results:
-            if "[!!!]" in res or "[-]" in res or "[!]" in res:
-                html += f"<li style='color: red; font-weight: bold;'>{res}</li>"
-            else:
-                html += f"<li style='color: green;'>{res}</li>"
-        html += "</ul>"
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Secure Scanner</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; padding: 20px; background: #f4f7f6; color: #333; }
+            h2 { color: #004085; }
+            .form-container { margin-bottom: 20px; }
+            input[type="text"] { width: 70%; max-width: 400px; padding: 12px; border: 1px solid #ccc; border-radius: 4px; font-size: 16px; }
+            button { padding: 12px 24px; background: #004085; color: white; border: none; border-radius: 4px; font-size: 16px; cursor: pointer; }
+            button:hover { background: #002752; }
+            .results-container { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); border: 1px solid #ddd; margin-top: 20px; }
+            ul { list-style-type: none; padding: 0; }
+            li { padding: 8px 0; border-bottom: 1px solid #eee; font-family: monospace; font-size: 14px; }
+            li:last-child { border-bottom: none; }
+            .critical { color: #d9534f; font-weight: bold; }
+            .warning { color: #f0ad4e; font-weight: bold; }
+            .safe { color: #5cb85c; }
+            .info { color: #5bc0de; }
+        </style>
+    </head>
+    <body>
+        <h2>☁️ Advanced Cloud Vulnerability Scanner</h2>
+        <div class="form-container">
+            <form method="POST">
+                <input type="text" name="url" placeholder="Enter target URL (e.g., https://example.com)" value="{{ target }}" required>
+                <button type="submit">Scan Now</button>
+            </form>
+        </div>
         
-    html += "</div></body></html>"
+        {% if results %}
+        <div class="results-container">
+            <h3>Scan Results for: {{ target }}</h3>
+            <ul>
+            {% for res in results %}
+                {% if "[!!!]" in res or "[-]" in res %}
+                    <li class="critical">{{ res }}</li>
+                {% elif "[!]" in res %}
+                    <li class="warning">{{ res }}</li>
+                {% elif "[+]" in res %}
+                    <li class="safe">{{ res }}</li>
+                {% else %}
+                    <li class="info">{{ res }}</li>
+                {% endif %}
+            {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+    </body>
+    </html>
+    """
     return render_template_string(html, results=results, target=target)
 
 if __name__ == '__main__':
